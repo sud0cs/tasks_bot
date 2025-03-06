@@ -6,8 +6,7 @@ import discord
 import os
 import datetime
 import trello
-
-from discord.utils import get
+import math
 
 #Class to handle messages
 
@@ -140,38 +139,75 @@ class TaskModal(CustomModal):
 class TaskListMessage(Message):
     def __init__(self, loop, channel=None):
         super().__init__(loop, channel)
+        self.max_column_width = 20
+
+    def write_column(self, text):
+        text = text.split(' ')
+        line = ''
+        lines = []
+        for i in text:
+            if len(i) + len(line) <= self.max_column_width:
+                line += ' ' + i
+            elif len(i) >= self.max_column_width:
+                lines.append(line.strip())
+                count = int(math.ceil(len(i)/self.max_column_width))
+                for j in range(count):
+                    line = i[j*self.max_column_width:(j*self.max_column_width)+self.max_column_width]
+                    if j!=count-1:
+                        lines.append(line.strip())
+            else:
+                lines.append(line.strip())
+                line = i
+        lines.append(line)
+        return lines
 
     def _build(self, tasks, page, items):
-        content = '# TASKS\n## Title\t\tDescription\t\tAssignees\n'
+        content = '```'
         for task in tasks[page*items:page*items+items]:
-            description  = task.get_description() if task.get_description() != "" and task.get_description() is not None else "-"
+            description = task.get_description() if task.get_description() != "" and task.get_description() is not None else "-"
+            description_list = self.write_column(description)
+            title_list = self.write_column(task.get_title())
             assignees = []
-            print(task.get_title())
             for i in task.get_assignees():
                 data = i.split(":")
                 assignees.append(f'{data[1]}') if data[0] == 'Role' else assignees.append(f'<@{data[1]}>')
-            content+=f'{task.get_title()}\t\t{description}\t\t{" ".join(assignees)}\t{task.is_done()}\n'
+            assignees = " ".join(assignees)
+            assignees_list = self.write_column(assignees)
+            max_length = max(len(description_list), len(title_list), len(assignees_list))
+            for i in range(max_length):
+                line = ''
+                for j in (description_list, title_list, assignees_list):
+                    try:
+                        line+='|' + j[i] + ' '*(self.max_column_width-len(j[i]))
+                    except Exception as e:
+                        line+= '|' + ' '*self.max_column_width
+                content+=line+'|\n'
+        content+='```'
         return Message.Content(content=content)
 
     def send(self, tasks, page=0, items = 10, delete_last = False):
         return self._send(self._build(tasks, page, items), delete_last)
 
 class TaskSelectMessage(Message):
-    def __init__(self, loop, channel=None):
+    #max values: https://discordpy.readthedocs.io/en/stable/interactions/api.html?highlight=select#discord.ui.Select
+    def __init__(self, loop, channel=None, max_values = 25):
         super().__init__(loop, channel)
         self.view = discord.ui.View()
-        self.task_selector_select = discord.ui.Select()
+        self.max_values = max_values
+        self.task_selector_select = discord.ui.Select(max_values=max_values)
         self.cancel_button = discord.ui.Button(label='Cancel')
     
-    def _build(self, tasks):
+    def _build(self, items):
+        #items must be a list with pairs of (label, value)
         self.view = discord.ui.View()
-        self.task_selector_select.options = [discord.SelectOption(label = v.get_title(), value=str(i)) for i,v in enumerate(tasks)]
+        self.task_selector_select.max_values = len(items) if len(items) < self.max_values else self.max_values
+        self.task_selector_select.options = [discord.SelectOption(label = label, value=value) for label,value in (items)]
         self.view.add_item(self.task_selector_select)
         self.view.add_item(self.cancel_button)
         return Message.Content(view = self.view)
 
-    def send(self, tasks): 
-        self._send(self._build(tasks))
+    def send(self, items): 
+        self._send(self._build(items))
 
 class NotificationMessage(Message):
     def __init__(self, loop, channel=None):
@@ -182,7 +218,8 @@ class NotificationMessage(Message):
         for i in task.get_assignees():
             data = i.split(":")
             assignees.append(f'{data[1]}') if data[0] == 'Role' else assignees.append(f'<@{data[1]}>')
-        content = f'# TASK {task.get_title()} is not done\n## finish this task before\n{task.get_description()}\n{' '.join(assignees)}'
+        end_date = f'before {task.get_end_date().strftime("%d/%m/%Y")}' if task.get_end_date() is not None else ''
+        content = f'# TASK {task.get_title()} is not done\n## finish this task {end_date}\n{task.get_description()}\n{' '.join(assignees)}'
         return Message.Content(content = content)
 
     def send(self, task):
@@ -352,14 +389,14 @@ class TaskManager():
         if self.trello is not None:
             self.trello.sync()
             tasks = self.trello.get_tasks()
-            titles = [i.get_title() for i in self.tasks]
+            ids = [i.get_trello_id() for i in self.tasks]
             for task in tasks:
-                if not task.get_title() in titles:
+                if not task.get_id() in ids:
                     t = Task()
                     t.update(**vars(task))
                     self.tasks.append(t)
                 else:
-                    self.tasks[titles.index(task.get_title())].update(**vars(task))
+                    self.tasks[ids.index(task.get_id())].update(**vars(task))
         self.persist_tasks()
 
 
@@ -367,10 +404,10 @@ class TaskManager():
         if self.trello is not None:
             self.trello.sync()
             tasks = self.trello.get_tasks()
-            titles = [i.get_title() for i in self.tasks]
+            ids = [i.get_trello_id() for i in self.tasks]
             for task in tasks:
-                if task.get_title() in titles:
-                    task.update(**vars(self.tasks[titles.index(task.get_title())]))
+                if task.get_id() in ids:
+                    task.update(**vars(self.tasks[ids.index(task.get_trello_id())]))
                     self.trello.update_task(task)
 
     def create_task(self, ctx, assignees):
@@ -382,18 +419,19 @@ class TaskManager():
 
     def assign_task(self, ctx, assignees):
         assignees = [i.__class__.__name__+':'+str(i.name if isinstance(i, discord.Role) else i.id) for i in assignees] if len(assignees)>0 else ['User:'+str(ctx.author.id),]
-        self.send_select_message(ctx.channel, self.tasks, self.assign_task_callback, assignees=assignees)
+        self.send_select_message(ctx.channel, [(v.get_title(),k) for k,v in enumerate(self.tasks)], self.assign_task_callback, assignees=assignees)
 
     def unassign_task(self, ctx, assignees):
         assignees = [i.__class__.__name__+':'+str(i.name if isinstance(i, discord.Role) else i.id) for i in assignees] if len(assignees)>0 else ['User:'+str(ctx.author.id),]
-        self.send_select_message(ctx.channel, self.tasks, self.unassign_task_callback, assignees=assignees)
+        self.send_select_message(ctx.channel, [(v.get_title(),k) for k,v in enumerate(self.tasks)], self.unassign_task_callback, assignees=assignees)
 
     def list_tasks(self, ctx):
         task_list_message = TaskListMessage(self.loop, ctx.channel)
         task_list_message.send(self.tasks)
 
     def set_done(self, ctx, is_done):
-        self.send_select_message(ctx.channel, self.tasks, self.set_done_callback, is_done = is_done)
+        tasks = [(v.get_title(), k) for k,v in enumerate(self.tasks) if not v.is_done() == is_done]
+        self.send_select_message(ctx.channel, tasks, self.set_done_callback, is_done = is_done)
 
     def persist_tasks(self):
         with open(f'{self.persist_dir}/{self.guild_id}.tasks', 'bw') as file:
@@ -403,7 +441,8 @@ class TaskManager():
         self.tasks.pop(id)
 
     def create_notification(self, ctx, rate, measure):
-        self.send_select_message(ctx.channel, self.tasks, self.create_notification_callback, rate = rate, measure = measure)
+
+        self.send_select_message(ctx.channel, [(v.get_title(),k) for k,v in enumerate(self.tasks)], self.create_notification_callback, rate = rate, measure = measure)
 
     async def create_button_callback(self, interaction):
         await interaction.message.delete()
@@ -415,20 +454,20 @@ class TaskManager():
 
     async def edit_button_callback(self, interaction):
         await interaction.message.delete()
-        self.send_select_message(interaction.channel, self.tasks, self.task_select_edit_callback)
+        self.send_select_message(interaction.channel, [(v.get_title(),k) for k,v in enumerate(self.tasks)], self.task_select_edit_callback, 1)
         return
 
     async def delete_button_callback(self, interaction):
         await interaction.message.delete()
-        self.send_select_message(interaction.channel, self.tasks, self.task_select_delete_callback)
+        self.send_select_message(interaction.channel, [(v.get_title(),k) for k,v in enumerate(self.tasks)], self.task_select_delete_callback)
         return
 
-    def send_select_message(self, channel, tasks, callback, **extra):
-        task_select_message = TaskSelectMessage(self.loop, channel)
+    def send_select_message(self, channel, items, callback, max_values=25, **extra):
+        task_select_message = TaskSelectMessage(self.loop, channel, max_values)
         task_select_message.bind_button(('task_selector'), (callback), '_select')
         task_select_message.bind_button(('cancel'), (self.cancel_button_callback))
         task_select_message.set_extra(**extra)
-        task_select_message.send(tasks)
+        task_select_message.send(items)
 
     async def create_modal_callback(self, interaction):
         t = Task()
@@ -475,49 +514,56 @@ class TaskManager():
 
     async def task_select_delete_callback(self, interaction):
         await interaction.message.delete()
-        task = int(interaction.data['values'][0])
+        task = interaction.data['values']
         confirm = ConfirmMessage(self.loop, interaction.channel)
         confirm.bind_button('confirm', self.delete_confirm_callback)
         confirm.set_extra(task = task)
-        confirm.send('DELETE TASK?', f'task "{self.tasks[task].title}" will be deleted')
+        confirm.send('DELETE TASK?', f'task "{self.tasks[task[0]].title}" will be deleted') if len(task) == 1 else confirm.send('DELETE TASKS?', 'Multiple tasks will be deleted') 
 
     async def delete_confirm_callback(self, interaction):
         await interaction.message.delete()
-        self.delete_task(interaction.extras['task'])
+        tasks = [int(i) for i in interaction.extras['task']]
+        tasks = sorted(tasks, reverse=True)
+        for task in tasks:
+            self.delete_task(task)
         self.persist_tasks()
 
     async def set_done_callback(self, interaction):
         await interaction.message.delete()
-        task = self.tasks[int(interaction.data['values'][0])]
-        task.set_done(interaction.extras['is_done'])
+        for i in interaction.data['values']:
+            task = self.tasks[int(i)]
+            task.set_done(interaction.extras['is_done'])
         self.persist_tasks()
 
     async def create_notification_callback(self, interaction):
         await interaction.message.delete()
-        task = self.tasks[int(interaction.data['values'][0])]
-        notification = Notification(interaction.extras['rate'], getattr(TimeMeasure, interaction.extras['measure']), task, None)
-        task.set_notification(notification)
+        for i in interaction.data['values']:
+            task = self.tasks[int(i)]
+            notification = Notification(interaction.extras['rate'], getattr(TimeMeasure, interaction.extras['measure']), task, None)
+            task.set_notification(notification)
+            notification.run(self.loop, self.notification_channel)
         self.persist_tasks()
-        notification.run(self.loop, self.notification_channel)
 
     async def assign_task_callback(self, interaction):
         await interaction.message.delete()
-        task = self.tasks[int(interaction.data['values'][0])]
-        assignees = task.get_assignees()
-        for assignee in interaction.extras.get('assignees', []):
-            if assignee not in assignees:
-                assignees.append(assignee)
-        task.set_assignees(assignees)
+        for i in interaction.data['values']:
+            task = self.tasks[int(i)]
+            assignees = task.get_assignees()
+            for assignee in interaction.extras.get('assignees', []):
+                if assignee not in assignees:
+                    assignees.append(assignee)
+            task.set_assignees(assignees)
         self.persist_tasks()
 
     async def unassign_task_callback(self, interaction):
         await interaction.message.delete()
-        task = self.tasks[int(interaction.data['values'][0])]
-        assignees = task.get_assignees()
-        for assignee in interaction.extras.get('assignees', []):
-            if assignee in assignees:
-                assignees.pop(assignees.index(assignee))
-        task.set_assignees(assignees)
+        for i in interaction.data['values']:
+            task = self.tasks[int(i)]
+            assignees = task.get_assignees()
+            for assignee in interaction.extras.get('assignees', []):
+                if assignee in assignees:
+                    assignees.pop(assignees.index(assignee))
+            task.set_assignees(assignees)
         self.persist_tasks()
 
 class Tag():
