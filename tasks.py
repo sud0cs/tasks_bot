@@ -139,7 +139,7 @@ class TaskModal(CustomModal):
 class TaskListMessage(Message):
     def __init__(self, loop, channel=None):
         super().__init__(loop, channel)
-        self.max_column_width = 20
+        self.max_column_width = 40
 
     def write_column(self, text):
         text = text.split(' ')
@@ -149,7 +149,8 @@ class TaskListMessage(Message):
             if len(i) + len(line) <= self.max_column_width:
                 line += ' ' + i
             elif len(i) >= self.max_column_width:
-                lines.append(line.strip())
+                if line != '':
+                    lines.append(line.strip())
                 count = int(math.ceil(len(i)/self.max_column_width))
                 for j in range(count):
                     line = i[j*self.max_column_width:(j*self.max_column_width)+self.max_column_width]
@@ -162,8 +163,11 @@ class TaskListMessage(Message):
         return lines
 
     def _build(self, tasks, page, items):
-        content = '```'
+        content = '`'
+        content+='|Title' + ' '*(self.max_column_width-len('title')) +'|Description' + ' '*(self.max_column_width-len('description')) + '|Is Done' + '|Start Date' + '|End Date  ' + '|Assignees' + '|`\n'
         for task in tasks[page*items:page*items+items]:
+            #separator = '`|' + '-'*self.max_column_width+'`\n'
+            #content+=separator+'|'
             description = task.get_description() if task.get_description() != "" and task.get_description() is not None else "-"
             description_list = self.write_column(description)
             title_list = self.write_column(task.get_title())
@@ -172,17 +176,23 @@ class TaskListMessage(Message):
                 data = i.split(":")
                 assignees.append(f'{data[1]}') if data[0] == 'Role' else assignees.append(f'<@{data[1]}>')
             assignees = " ".join(assignees)
-            assignees_list = self.write_column(assignees)
-            max_length = max(len(description_list), len(title_list), len(assignees_list))
+            max_length = max(len(description_list), len(title_list))
             for i in range(max_length):
                 line = ''
-                for j in (description_list, title_list, assignees_list):
+                for j in (title_list, description_list):
                     try:
                         line+='|' + j[i] + ' '*(self.max_column_width-len(j[i]))
                     except Exception as e:
                         line+= '|' + ' '*self.max_column_width
-                content+=line+'|\n'
-        content+='```'
+                if i==0:
+                    start_date = task.get_start_date().strftime('%d/%m/%Y')
+                    end_date = task.get_end_date()
+                    print(end_date)
+                    print(type(end_date))
+                    end_date = end_date.strftime('%d/%m/%Y') if end_date is not None else '-'
+                    content+='`'+line + '|' + f'{task.is_done()}' + ' '*(len('is done') - len(str(task.is_done()))) + '|' + start_date + ' '*(len('start date')-len(start_date)) + '|' + end_date + ' '*(10-len(end_date)) +'|`' + assignees + '\n'
+                else:
+                    content+='`'+line+'|`'+'\n'
         return Message.Content(content=content)
 
     def send(self, tasks, page=0, items = 10, delete_last = False):
@@ -312,11 +322,20 @@ class Task():
     def set_content(self, description):
         self.description = description
 
-    def set_start_date(self, start_date):
-        self.start_date = start_date
+    def set_start_date(self, start_date:str|datetime.datetime):
+        if isinstance(start_date, str):
+            self.start_date = datetime.datetime.strptime(start_date, '%d/%m/%Y')
+        else:
+            self.start_date = start_date
 
-    def set_end_date(self, end_date):
-        self.end_date = end_date
+    def set_end_date(self, end_date:str|datetime.datetime):
+        if isinstance(end_date, str):
+            try:
+                self.end_date = datetime.datetime.strptime(end_date, '%d/%m/%Y')
+            except:
+                self.end_date = self.end_date
+        else:
+            self.end_date = end_date
 
     def set_notification(self, notification:Notification|None):
         self.notification = notification
@@ -441,8 +460,13 @@ class TaskManager():
         self.tasks.pop(id)
 
     def create_notification(self, ctx, rate, measure):
-
         self.send_select_message(ctx.channel, [(v.get_title(),k) for k,v in enumerate(self.tasks)], self.create_notification_callback, rate = rate, measure = measure)
+
+    def set_start_date(self, ctx, date):
+        self.send_select_message(ctx.channel, [(v.get_title(),k) for k,v in enumerate(self.tasks)], self.set_start_date_callback, date=date)
+
+    def set_end_date(self, ctx, date):
+        self.send_select_message(ctx.channel, [(v.get_title(),k) for k,v in enumerate(self.tasks)], self.set_end_date_callback, date=date)
 
     async def create_button_callback(self, interaction):
         await interaction.message.delete()
@@ -491,6 +515,8 @@ class TaskManager():
                 if j.get('custom_id') == 'start_date' and j.get('value', '').strip() == '':
                     today = datetime.date.today()
                     kwargs[j.get('custom_id')] = datetime.datetime(year=today.year, month=today.month, day=today.day)
+                if j.get('custom_id') == 'end_date' and j.get('value', '').strip() == '':
+                    kwargs[j.get('custom_id')] = None
         kwargs.update(interaction.extras)
         task.update(**kwargs)
         return task
@@ -554,7 +580,7 @@ class TaskManager():
                     assignees.append(assignee)
             task.set_assignees(assignees)
         self.persist_tasks()
-
+                                         
     async def unassign_task_callback(self, interaction):
         await interaction.message.delete()
         for i in interaction.data['values']:
@@ -564,6 +590,21 @@ class TaskManager():
                 if assignee in assignees:
                     assignees.pop(assignees.index(assignee))
             task.set_assignees(assignees)
+        self.persist_tasks()
+
+    # Can rewrite in 1 function
+    async def set_start_date_callback(self, interaction):
+        await interaction.message.delete()
+        for i in interaction.data['values']:
+            task = self.tasks[int(i)]
+            task.set_start_date(interaction.extras['date'])
+        self.persist_tasks()
+
+    async def set_end_date_callback(self, interaction):
+        await interaction.message.delete()
+        for i in interaction.data['values']:
+            task = self.tasks[int(i)]
+            task.set_end_date(interaction.extras['date'])
         self.persist_tasks()
 
 class Tag():

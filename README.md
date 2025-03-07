@@ -7,10 +7,8 @@ a discord bot to manage tasks, with trello "support"
 - trello support??
 
 # TODO
-- allow bulk selection of tasks
 - fix task_list message (it sucks)
 - fix other bugs
-- fix notification message
 - add comments and refactor code
 - fix more bugs
 - add more trello options

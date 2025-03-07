@@ -29,6 +29,8 @@ class Bot():
         self.sync_trello()
         self.assign()
         self.unassign()
+        self.set_start_date()
+        self.set_end_date()
 
     def task(self):
         @self.bot.command()
@@ -95,6 +97,18 @@ class Bot():
         async def unassign(context:Context, *args:discord.User|discord.Role):
             self.taskmanagers[context.guild.id].unassign_task(context, args)
         return unassign
+
+    def set_start_date(self):
+        @self.bot.command()
+        async def set_start_date(context:Context, start_date):
+            self.taskmanagers[context.guild.id].set_start_date(context, start_date)
+        return set_start_date
+
+    def set_end_date(self):
+        @self.bot.command()
+        async def set_end_date(context:Context, end_date):
+            self.taskmanagers[context.guild.id].set_end_date(context, end_date)
+        return set_end_date
 
     async def on_guild_available(self, guild):
         notification_channel = discord.utils.get(guild.channels, name=self.notification_channel_name)
