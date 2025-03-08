@@ -22,6 +22,8 @@ a discord bot to manage tasks, with trello "support"
 | unassign | mentions to users or roles (optional, default is command author) | unassigns mentioned users from a task |
 | set_done | - | marks a task as done |
 | set_undone | - | marks a task as undone |
+| set_start_date | string date (formatted as dd/mm/yyyy) | sets start_date for one or multiple tasks |
+| set_end_date | string date (formatted as dd/mm/yyyy) | sets end_date for one or multiple tasks |
 | notify_every | int count, string time_measure | sends a reminder to finish the task. Example: !notify_every 10 minutes |
 | assign_trello | int board_id | assigns a trello board to the discord server |
 | sync_local | - | updates the trello tasks in the bot |

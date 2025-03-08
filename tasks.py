@@ -139,21 +139,27 @@ class TaskModal(CustomModal):
 class TaskListMessage(Message):
     def __init__(self, loop, channel=None):
         super().__init__(loop, channel)
+        self.view = discord.ui.View()
+        self.previous_button = discord.ui.Button(label='<')
+        self.next_button = discord.ui.Button(label='>')
         self.max_column_width = 40
-
-    def write_column(self, text):
+        self.page_index = 0
+        self.tasks = []
+        self.pages = []
+        self.bind_button(('previous', 'next'), (self.previous_button_callback, self.next_button_callback))
+    def write_column(self, text, max_width):
         text = text.split(' ')
         line = ''
         lines = []
         for i in text:
-            if len(i) + len(line) <= self.max_column_width:
+            if len(i) + len(line) <= max_width:
                 line += ' ' + i
-            elif len(i) >= self.max_column_width:
+            elif len(i) >= max_width:
                 if line != '':
                     lines.append(line.strip())
-                count = int(math.ceil(len(i)/self.max_column_width))
+                count = int(math.ceil(len(i)/max_width))
                 for j in range(count):
-                    line = i[j*self.max_column_width:(j*self.max_column_width)+self.max_column_width]
+                    line = i[j*max_width:(j*max_width)+max_width]
                     if j!=count-1:
                         lines.append(line.strip())
             else:
@@ -162,15 +168,15 @@ class TaskListMessage(Message):
         lines.append(line)
         return lines
 
-    def _build(self, tasks, page, items):
+    def _gen_pages(self, tasks):
+        pages = []
         content = '`'
         content+='|Title' + ' '*(self.max_column_width-len('title')) +'|Description' + ' '*(self.max_column_width-len('description')) + '|Is Done' + '|Start Date' + '|End Date  ' + '|Assignees' + '|`\n'
-        for task in tasks[page*items:page*items+items]:
-            #separator = '`|' + '-'*self.max_column_width+'`\n'
-            #content+=separator+'|'
+        for task in tasks:
+            task_text = ''
             description = task.get_description() if task.get_description() != "" and task.get_description() is not None else "-"
-            description_list = self.write_column(description)
-            title_list = self.write_column(task.get_title())
+            description_list = self.write_column(description, self.max_column_width)
+            title_list = self.write_column(task.get_title(), self.max_column_width)
             assignees = []
             for i in task.get_assignees():
                 data = i.split(":")
@@ -187,16 +193,46 @@ class TaskListMessage(Message):
                 if i==0:
                     start_date = task.get_start_date().strftime('%d/%m/%Y')
                     end_date = task.get_end_date()
-                    print(end_date)
-                    print(type(end_date))
                     end_date = end_date.strftime('%d/%m/%Y') if end_date is not None else '-'
-                    content+='`'+line + '|' + f'{task.is_done()}' + ' '*(len('is done') - len(str(task.is_done()))) + '|' + start_date + ' '*(len('start date')-len(start_date)) + '|' + end_date + ' '*(10-len(end_date)) +'|`' + assignees + '\n'
+                    line='`'+line + '|' + f'{task.is_done()}' + ' '*(len('is done') - len(str(task.is_done()))) + '|' + start_date + ' '*(len('start date')-len(start_date)) + '|' + end_date + ' '*(10-len(end_date)) +'|`' + assignees + '\n'
                 else:
-                    content+='`'+line+'|`'+'\n'
-        return Message.Content(content=content)
+                    line='`'+line+'|`'+'\n'
+                task_text+=line
+            if len(content)+len(task_text)>2000:
+                pages.append(content)
+                content = '`'
+                content+='|Title' + ' '*(self.max_column_width-len('title')) +'|Description' + ' '*(self.max_column_width-len('description')) + '|Is Done' + '|Start Date' + '|End Date  ' + '|Assignees' + '|`\n'
+            else:
+                content+=task_text
+        if pages[len(pages)-1] != content:
+            pages.append(content)
+        return pages
 
-    def send(self, tasks, page=0, items = 10, delete_last = False):
-        return self._send(self._build(tasks, page, items), delete_last)
+    def _build(self, page, overwrite):
+        self.view = discord.ui.View()
+        self.page_index = page
+        self.previous_button.disabled = False
+        self.next_button.disabled = False
+        if page == 0:
+            self.previous_button.disabled = True
+        if page == len(self.pages)-1:
+            self.next_button.disabled = True
+        if self.pages == [] or overwrite:
+            self.pages = self._gen_pages(self.tasks)
+        self.view.add_item(self.previous_button)
+        self.view.add_item(self.next_button)
+        content = self.pages[page]
+        return Message.Content(content=content, view=self.view)
+
+    def send(self, tasks, page=0, overwrite=False, delete_last = True):
+        self.tasks = tasks
+        return self._send(self._build(page, overwrite), delete_last)
+    
+    async def next_button_callback(self, interaction):
+        self.send(self.tasks, self.page_index+1)
+
+    async def previous_button_callback(self, interaction):
+        self.send(self.tasks, self.page_index-1)
 
 class TaskSelectMessage(Message):
     #max values: https://discordpy.readthedocs.io/en/stable/interactions/api.html?highlight=select#discord.ui.Select
